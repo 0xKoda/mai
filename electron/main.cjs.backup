@@ -1,0 +1,229 @@
+import { app, BrowserWindow, ipcMain, session } from 'electron';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { getOrCreateClient, cleanupClients } from './mcp-bridge.mjs';
+import fs from 'fs';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const isDev = !app.isPackaged;
+
+// Global error handler to log unhandled exceptions
+process.on('uncaughtException', (error) => {
+    console.error('[Main Process] Uncaught Exception:', error);
+});
+
+function createWindow() {
+    // Set up Content Security Policy
+    session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+        callback({
+            responseHeaders: {
+                ...details.responseHeaders,
+                'Content-Security-Policy': [
+                    "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob:;",
+                    "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: 'wasm-unsafe-eval';",
+                    "connect-src 'self' https: wss: blob: data:;",
+                    "img-src 'self' data: blob: https:;",
+                    "style-src 'self' 'unsafe-inline' https:;",
+                    "font-src 'self' data: https:;",
+                    "worker-src 'self' blob:;"
+                ].join(' ')
+            }
+        });
+    });
+
+    // Create the browser window
+    const mainWindow = new BrowserWindow({
+        width: 1200,
+        height: 800,
+        webPreferences: {
+            nodeIntegration: false,
+            contextIsolation: true,
+            webSecurity: true,
+            sandbox: false,
+            preload: path.join(__dirname, 'preload.cjs'),
+            webgl: true,
+            additionalArguments: ['--enable-features=WebAssembly']
+        }
+    });
+
+    // Function to load the app with retry
+    const loadApp = async (retries = 3) => {
+        try {
+            if (isDev) {
+                await mainWindow.loadURL('http://localhost:5173');
+                mainWindow.webContents.openDevTools();
+            } else {
+                await mainWindow.loadFile(path.join(__dirname, '../build/index.html'));
+            }
+        } catch (error) {
+            console.error('Failed to load app:', error);
+            if (retries > 0) {
+                console.log(`Retrying... (${retries} attempts left)`);
+                setTimeout(() => loadApp(retries - 1), 1000);
+            }
+        }
+    };
+
+    loadApp();
+
+    // Handle window reload request
+    ipcMain.on('reload-window', () => {
+        loadApp();
+    });
+
+    // Log any console messages from the renderer
+    mainWindow.webContents.on('console-message', (event, level, message, line, sourceId) => {
+        console.log(`[Renderer Console]: ${message}`);
+    });
+
+    // Handle WebGL context lost
+    mainWindow.webContents.on('context-lost', () => {
+        console.error('WebGL context lost');
+    });
+
+    // Handle WebGL context restored
+    mainWindow.webContents.on('context-restored', () => {
+        console.log('WebGL context restored');
+    });
+}
+
+async function handleMCPExecute(event, { command, args, serverId }) {
+    try {
+        // Validate inputs
+        if (!command) {
+            throw new Error('No command specified for MCP execution');
+        }
+        
+        // Ensure args is an array
+        const safeArgs = Array.isArray(args) ? args : (args ? [args] : []);
+        
+        console.log(`[Main Process] MCP Execute request received:`, { 
+            command, 
+            args: safeArgs,
+            serverId 
+        });
+        
+        // Special handling for 'node' command in production
+        let adjustedCommand = command;
+        let adjustedArgs = [...safeArgs];
+        
+        // If this is a node command and we're in production, use Electron as Node
+        if (command === 'node' && !app.isPackaged) {
+            console.log('[Main Process] Using system node in development');
+        } else if (command === 'node') {
+            console.log('[Main Process] Using Electron as Node in production');
+            // Electron can run Node.js code when ELECTRON_RUN_AS_NODE=1 is set
+            // This will be handled in the bridge
+        }
+        
+        // Get or create the persistent client connection for the server script
+        const connection = await getOrCreateClient(adjustedCommand, adjustedArgs, serverId);
+        const client = connection.client; // Use the existing client
+
+        // For rust-docs MCP, we expect the tool to be mcp_rust_docs_lookup_crate_docs
+        let toolName = 'mcp_rust_docs_lookup_crate_docs';
+        let toolArgs = {};
+        
+        // Handle different MCP server types and tools
+        if (command.includes('eth') || command.includes('ethereum')) {
+            // Ethereum MCP server
+            if (safeArgs[0] === 'mcp_eth_getCode' || safeArgs[0] === 'mcp_eth_getBalance') {
+                toolName = safeArgs[0];
+                toolArgs = { address: safeArgs[1] };
+                if (safeArgs.length > 2) {
+                    toolArgs.blockParameter = safeArgs[2];
+                }
+            } else if (safeArgs[0] === 'mcp_eth_gasPrice') {
+                toolName = safeArgs[0];
+                toolArgs = { random_string: "dummy" };
+            } else {
+                toolName = safeArgs[0] || toolName;
+                toolArgs = { args: safeArgs.slice(1) };
+            }
+        } else {
+            // Default - treat first arg as tool name, rest as crateName for Rust docs MCP
+            toolName = safeArgs[0] || toolName;
+            
+            // Join all args with space for the crate name
+            const crateName = safeArgs.slice(1).join(' ').replace(/^with\s+/, '');
+            toolArgs = { crateName };
+        }
+
+        console.log(`[Main Process] Executing MCP tool ${toolName} on server ${command} with args:`, toolArgs);
+
+        // Call the tool using the persistent client
+        const result = await client.request({
+            method: "tools/call",
+            params: {
+                name: toolName,
+                arguments: toolArgs,
+                _meta: {
+                    progressToken: Date.now().toString()
+                }
+            }
+        });
+
+        console.log(`[Main Process] MCP execution successful for ${command}`);
+
+        // Format the result for display
+        const formattedResult = {
+            output: [{
+                text: result.content || result.result || JSON.stringify(result),
+                type: 'text'
+            }],
+            error: null,
+            serverId
+        };
+
+        // DO NOT CLOSE TRANSPORT - keep it open for future requests
+        return formattedResult;
+
+    } catch (error) {
+        console.error(`[Main Process] MCP execution error for ${command}:`, error);
+
+        // If an error occurs, we might want to log it but not necessarily close the transport
+        // unless the error indicates a fatal connection issue.
+        // For now, just return the error.
+
+        return {
+            error: {
+                message: `MCP execution failed for ${command}: ${error?.message || 'Unknown error'}`,
+                stack: error?.stack,
+                serverId
+            }
+        };
+    }
+}
+
+// Add handler for database directory access
+ipcMain.handle('db:get-user-data-path', () => {
+    return app.getPath('userData');
+});
+
+// Register IPC handler for MCP execution
+ipcMain.handle('mcp:execute', handleMCPExecute);
+
+app.whenReady().then(() => {
+    createWindow();
+
+    app.on('activate', function () {
+        if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    });
+});
+
+app.on('window-all-closed', function () {
+    if (process.platform !== 'darwin') {
+        cleanupClients().finally(() => app.quit()); // Cleanup before quitting
+    } else {
+        cleanupClients(); // Cleanup on macOS too
+    }
+});
+
+// Also cleanup when the app quits explicitly
+app.on('will-quit', async (event) => {
+    event.preventDefault(); // Prevent quitting immediately
+    await cleanupClients();
+    app.exit(); // Now exit
+}); 

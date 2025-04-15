@@ -1,0 +1,58 @@
+{
+  "appId": "com.yourdomain.localai",
+  "productName": "LocalAI",
+  "directories": {
+    "output": "dist_electron",
+    "buildResources": "build"
+  },
+  "files": [
+    "build/**/*",
+    "electron/**/*",
+    "node_modules/**/*",
+    "package.json"
+  ],
+  "extraMetadata": {
+    "main": "electron/main.mjs"
+  },
+  "asarUnpack": [
+    "**/node_modules/idb/**/*",
+    "**/node_modules/@modelcontextprotocol/**/*",
+    "**/node_modules/socket.io/**/*",
+    "**/node_modules/socket.io-client/**/*",
+    "**/mcp/**/*",
+    "**/*.mjs",
+    "**/*.cjs",
+    "**/*.js",
+    "**/node_modules/child_process/**/*",
+    "**/node_modules/path/**/*",
+    "**/node_modules/fs/**/*",
+    "**/node_modules/util/**/*",
+    "**/node_modules/os/**/*",
+    "**/node_modules/url/**/*"
+  ],
+  "asar": false,
+  "electronVersion": "35.0.0",
+  "mac": {
+    "category": "public.app-category.productivity",
+    "target": ["dmg", "zip"],
+    "icon": "build/icon.icns",
+    "darkModeSupport": true,
+    "hardenedRuntime": true
+  },
+  "win": {
+    "target": ["nsis"],
+    "icon": "build/icon.ico"
+  },
+  "linux": {
+    "target": ["AppImage", "deb"],
+    "category": "Utility",
+    "icon": "build/icon.png"
+  },
+  "extraResources": [
+    { "from": "mcp", "to": "mcp", "filter": ["**/*"] },
+    { "from": "electron", "to": "electron" },
+    { "from": "node_modules", "to": "node_modules" },
+    { "from": "static", "to": "static" }
+  ],
+  "publish": null
+} 

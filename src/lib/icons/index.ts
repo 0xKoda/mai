@@ -1,0 +1,15 @@
+// Export all icons from this index file
+export { default as SidebarToggle } from './SidebarToggle.svelte';
+export { default as ChatIcon } from './ChatIcon.svelte';
+export { default as NotesIcon } from './NotesIcon.svelte';
+export { default as AddIcon } from './AddIcon.svelte';
+export { default as UserIcon } from './UserIcon.svelte';
+export { default as SettingsIcon } from './SettingsIcon.svelte';
+export { default as SearchIcon } from './SearchIcon.svelte';
+export { default as ModelIcon } from './ModelIcon.svelte';
+export { default as UploadIcon } from './UploadIcon.svelte';
+export { default as SendIcon } from './SendIcon.svelte';
+export { default as AIIcon } from './AIIcon.svelte';
+export { default as ThemeToggleIcon } from './ThemeToggleIcon.svelte';
+export { default as EditIcon } from './EditIcon.svelte';
+export { default as PreviewIcon } from './PreviewIcon.svelte';
