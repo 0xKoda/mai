@@ -2,6 +2,8 @@
 
 A powerful desktop chat application that runs AI models locally, built with Electron, SvelteKit, and WebLLM.
 
+Select and run any model from [MLC.AI Models](https://mlc.ai/models) locally on your device. 
+
 ## Overview
 
 MAI is a desktop application designed to provide AI assistance while respecting your privacy. All AI processing happens locally on your machine without sending your data to external servers.
